@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Naukri Auto Update</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script>
+  tailwind.config = {
+    theme: {
+      extend: {
+        colors: {
+          brand: { 50:'#eef4ff',100:'#dfeaff',200:'#bfd4ff',300:'#93b6ff',
+                   400:'#5f8dff',500:'#3b6bf0',600:'#2551d2',700:'#1e41a8',
+                   800:'#1c3887',900:'#1b326e' }
+        },
+        boxShadow: {
+          card: '0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.1)',
+          ring: '0 0 0 4px rgba(59,107,240,.15)',
+        }
+      }
+    }
+  }
+</script>
+<style>
+  html, body { background: #f6f8fb; }
+  input[type="time"]::-webkit-calendar-picker-indicator { filter: invert(.3); }
+  .fade-in { animation: fade .25s ease-out; }
+  @keyframes fade { from { opacity:0; transform: translateY(4px);} to { opacity:1; transform:none;} }
+</style>
+</head>
+<body class="h-full text-slate-800 antialiased">
+
+<!-- ─────────────── AUTH SCREEN ─────────────── -->
+<section id="auth-screen" class="min-h-screen flex items-center justify-center px-4 hidden">
+  <div class="w-full max-w-md bg-white rounded-2xl shadow-card p-8 fade-in">
+    <div class="flex items-center gap-3 mb-6">
+      <div class="w-10 h-10 rounded-xl bg-brand-600 text-white grid place-items-center font-bold">N</div>
+      <div>
+        <h1 class="text-lg font-semibold">Naukri Auto Update</h1>
+        <p class="text-xs text-slate-500">Keep your profile fresh, automatically.</p>
+      </div>
+    </div>
+
+    <div class="flex bg-slate-100 p-1 rounded-xl text-sm mb-5">
+      <button id="tab-login" class="flex-1 py-2 rounded-lg font-medium bg-white shadow-sm">Sign in</button>
+      <button id="tab-register" class="flex-1 py-2 rounded-lg font-medium text-slate-500">Create account</button>
+    </div>
+
+    <!-- Login -->
+    <form id="form-login" class="space-y-3">
+      <label class="block">
+        <span class="text-xs font-medium text-slate-600">Email</span>
+        <input name="email" type="email" required class="mt-1 block w-full rounded-lg border-slate-200 border px-3 py-2 focus:outline-none focus:border-brand-500 focus:shadow-ring" />
+      </label>
+      <label class="block">
+        <span class="text-xs font-medium text-slate-600">Password</span>
+        <input name="password" type="password" required class="mt-1 block w-full rounded-lg border-slate-200 border px-3 py-2 focus:outline-none focus:border-brand-500 focus:shadow-ring" />
+      </label>
+      <button class="w-full bg-brand-600 hover:bg-brand-700 text-white py-2.5 rounded-lg font-medium mt-2">Sign in</button>
+    </form>
+
+    <!-- Register -->
+    <form id="form-register" class="space-y-3 hidden">
+      <label class="block">
+        <span class="text-xs font-medium text-slate-600">Full name</span>
+        <input name="name" type="text" required class="mt-1 block w-full rounded-lg border-slate-200 border px-3 py-2 focus:outline-none focus:border-brand-500 focus:shadow-ring" />
+      </label>
+      <label class="block">
+        <span class="text-xs font-medium text-slate-600">Email</span>
+        <input name="email" type="email" required class="mt-1 block w-full rounded-lg border-slate-200 border px-3 py-2 focus:outline-none focus:border-brand-500 focus:shadow-ring" />
+      </label>
+      <label class="block">
+        <span class="text-xs font-medium text-slate-600">Password <span class="text-slate-400">(min 8)</span></span>
+        <input name="password" type="password" minlength="8" required class="mt-1 block w-full rounded-lg border-slate-200 border px-3 py-2 focus:outline-none focus:border-brand-500 focus:shadow-ring" />
+      </label>
+      <button class="w-full bg-brand-600 hover:bg-brand-700 text-white py-2.5 rounded-lg font-medium mt-2">Create account</button>
+    </form>
+
+    <p id="auth-error" class="text-sm text-rose-600 mt-3 hidden"></p>
+  </div>
+</section>
+
+<!-- ─────────────── APP SCREEN ─────────────── -->
+<section id="app-screen" class="hidden">
+
+  <!-- NAV -->
+  <header class="bg-white border-b border-slate-100 sticky top-0 z-10">
+    <div class="max-w-5xl mx-auto px-4 py-3 flex items-center justify-between">
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-lg bg-brand-600 text-white grid place-items-center font-bold">N</div>
+        <div class="leading-tight">
+          <h1 class="font-semibold">Naukri Auto Update</h1>
+          <p class="text-xs text-slate-500">Hi, <span id="nav-name">…</span></p>
+        </div>
+      </div>
+      <div class="flex items-center gap-3">
+        <span id="nav-subscription" class="text-xs px-3 py-1.5 rounded-full font-medium"></span>
+        <button id="btn-logout" class="text-sm text-slate-500 hover:text-slate-800">Sign out</button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-5xl mx-auto px-4 py-8 space-y-8">
+
+    <!-- STATUS BANNER -->
+    <div id="status-banner" class="hidden rounded-xl px-4 py-3 text-sm fade-in"></div>
+
+    <!-- ACCOUNT -->
+    <section class="bg-white rounded-2xl shadow-card p-6">
+      <div class="flex items-start justify-between gap-4 mb-4">
+        <div>
+          <h2 class="font-semibold">Account</h2>
+          <p class="text-sm text-slate-500">Update your display name or password.</p>
+        </div>
+      </div>
+
+      <form id="form-account" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <label class="block md:col-span-2">
+          <span class="text-xs font-medium text-slate-600">Name</span>
+          <input id="in-name" type="text" class="mt-1 block w-full rounded-lg border-slate-200 border px-3 py-2 focus:outline-none focus:border-brand-500 focus:shadow-ring" />
+        </label>
+        <label class="block">
+          <span class="text-xs font-medium text-slate-600">Current password <span class="text-slate-400">(only if changing)</span></span>
+          <input id="in-current-password" type="password" autocomplete="current-password" class="mt-1 block w-full rounded-lg border-slate-200 border px-3 py-2 focus:outline-none focus:border-brand-500 focus:shadow-ring" />
+        </label>
+        <label class="block">
+          <span class="text-xs font-medium text-slate-600">New password</span>
+          <input id="in-new-password" type="password" autocomplete="new-password" minlength="8" class="mt-1 block w-full rounded-lg border-slate-200 border px-3 py-2 focus:outline-none focus:border-brand-500 focus:shadow-ring" />
+        </label>
+        <div class="md:col-span-2 flex justify-end">
+          <button class="bg-slate-900 hover:bg-black text-white px-4 py-2 rounded-lg text-sm font-medium">Save account</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- NAUKRI PROFILE + SCHEDULE -->
+    <section class="bg-white rounded-2xl shadow-card p-6">
+      <div class="flex items-start justify-between gap-4 mb-4">
+        <div>
+          <h2 class="font-semibold">Naukri profile</h2>
+          <p class="text-sm text-slate-500">Your Naukri login, resume and daily schedule.</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <label class="inline-flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" id="in-enabled" class="sr-only peer" />
+            <span class="w-10 h-6 rounded-full bg-slate-200 peer-checked:bg-brand-600 relative transition">
+              <span class="absolute top-0.5 left-0.5 w-5 h-5 bg-white rounded-full transition peer-checked:translate-x-4"></span>
+            </span>
+            <span class="text-sm font-medium" id="lbl-enabled">Enabled</span>
+          </label>
+        </div>
+      </div>
+
+      <form id="form-profile" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <label class="block">
+          <span class="text-xs font-medium text-slate-600">Naukri email</span>
+          <input id="in-naukri-email" type="email" class="mt-1 block w-full rounded-lg border-slate-200 border px-3 py-2 focus:outline-none focus:border-brand-500 focus:shadow-ring" placeholder="you@example.com" />
+        </label>
+        <label class="block">
+          <span class="text-xs font-medium text-slate-600">Naukri password
+            <span class="text-slate-400">(stored encrypted)</span>
+          </span>
+          <input id="in-naukri-password" type="password" autocomplete="off" class="mt-1 block w-full rounded-lg border-slate-200 border px-3 py-2 focus:outline-none focus:border-brand-500 focus:shadow-ring" placeholder="•••••••• — leave blank to keep existing" />
+        </label>
+
+        <label class="block md:col-span-2">
+          <span class="text-xs font-medium text-slate-600">Resume PDF
+            <span id="resume-current" class="text-slate-400"></span>
+          </span>
+          <input id="in-resume" type="file" accept="application/pdf" class="mt-1 block w-full text-sm file:mr-3 file:py-2 file:px-3 file:rounded-lg file:border-0 file:bg-brand-50 file:text-brand-700 file:font-medium file:hover:bg-brand-100" />
+        </label>
+
+        <label class="block">
+          <span class="text-xs font-medium text-slate-600">Runs per day</span>
+          <select id="in-schedule-mode" class="mt-1 block w-full rounded-lg border-slate-200 border px-3 py-2 focus:outline-none focus:border-brand-500 focus:shadow-ring">
+            <option value="once">Once per day</option>
+            <option value="twice">Twice per day</option>
+          </select>
+        </label>
+
+        <div class="grid grid-cols-2 gap-4">
+          <label class="block">
+            <span class="text-xs font-medium text-slate-600">Time 1</span>
+            <input id="in-time1" type="time" class="mt-1 block w-full rounded-lg border-slate-200 border px-3 py-2 focus:outline-none focus:border-brand-500 focus:shadow-ring" />
+          </label>
+          <label class="block" id="time2-wrap">
+            <span class="text-xs font-medium text-slate-600">Time 2</span>
+            <input id="in-time2" type="time" class="mt-1 block w-full rounded-lg border-slate-200 border px-3 py-2 focus:outline-none focus:border-brand-500 focus:shadow-ring" />
+          </label>
+        </div>
+
+        <div class="md:col-span-2 flex items-center justify-between pt-2">
+          <div class="text-xs text-slate-500" id="last-run-info">No run yet.</div>
+          <div class="flex gap-2">
+            <button type="button" id="btn-run-now" class="px-4 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-sm font-medium">
+              Run now
+            </button>
+            <button class="bg-brand-600 hover:bg-brand-700 text-white px-4 py-2 rounded-lg text-sm font-medium">
+              Save profile
+            </button>
+          </div>
+        </div>
+      </form>
+    </section>
+
+    <!-- RUN HISTORY -->
+    <section class="bg-white rounded-2xl shadow-card p-6">
+      <div class="flex items-center justify-between mb-4">
+        <div>
+          <h2 class="font-semibold">Recent runs</h2>
+          <p class="text-sm text-slate-500">Last 20 scheduled / manual runs.</p>
+        </div>
+        <button id="btn-refresh-runs" class="text-sm text-brand-600 hover:text-brand-700">Refresh</button>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead class="text-left text-xs text-slate-500">
+            <tr>
+              <th class="py-2">Started</th>
+              <th class="py-2">Status</th>
+              <th class="py-2">Attempts</th>
+              <th class="py-2">Error</th>
+            </tr>
+          </thead>
+          <tbody id="runs-body" class="divide-y divide-slate-100">
+            <tr><td colspan="4" class="py-3 text-slate-400">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="text-center text-xs text-slate-400 py-8">Naukri Auto Update · built with care</footer>
+</section>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

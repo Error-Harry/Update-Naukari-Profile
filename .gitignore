@@ -1,1 +1,15 @@
 .env
+server/.env
+server/naukari_bot/.env
+server/naukari_bot/.pw-profile/
+var/
+artifacts/
+logs/
+__pycache__/
+*.pyc
+.venv/
+server/.venv/
+
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/

@@ -1,86 +1,188 @@
-# Naukri Profile Auto-Updater
+# Naukri Auto Update (SaaS edition)
 
-A Python automation script built with Playwright to automatically update your Naukri.com profile daily. The script performs a "no-op" update by adding and removing a dot (`.`) to your resume headline and re-uploading your resume. This tricks the Naukri algorithm into registering recent activity, bringing your profile to the top of recruiter searches.
+Multi-user web app that keeps Naukri profiles fresh by re-uploading a resume and
+bumping the resume headline on a daily schedule — so recruiters see your profile
+at the top of their searches.
 
-The project is built using Python, Poetry (for dependency management), and Playwright, with a GitHub Action to automate the script every morning.
+Each user signs up, stores their Naukri login + resume PDF, and picks when to run
+(once or twice a day). A single Playwright runner on the server performs the
+update for every user in sequence.
 
----
+## Stack
 
-## Features
-- **Headless automation**: Uses Playwright to interactively log in and bypass popups.
-- **Smart updates**: Appends and removes a period (`.`) in the resume headline to cleanly simulate a profile modification without actually changing text.
-- **Resume uploading**: Automatically uploads a given PDF resume to the portal.
-- **Email notifications**: Sends a success/failure email report via SMTP.
-- **CI/CD ready**: Pre-configured GitHub Actions workflow runs the script daily at 9:30 AM IST.
+- **API**: FastAPI (async) + SQLAlchemy 2 + asyncpg
+- **DB**: Postgres (Neon tested)
+- **Auth**: JWT (bcrypt for user passwords) + role-based access (`user` / `admin`)
+- **At-rest encryption**: Fernet for each user's Naukri password
+- **Scheduler**: APScheduler (AsyncIO) — one cron job per schedule slot, per user
+- **Browser**: Playwright Chromium (run under `xvfb-run` on servers without a display)
+- **Frontend**: React 18 + Vite + TypeScript + Tailwind + Radix UI + framer-motion + TanStack Query (in `frontend/`)
+- **Billing**: mock `/api/me/billing` endpoints — drop in Stripe/Razorpay when ready
 
----
+## Layout
 
-## Prerequisites
-- Python 3.11+
-- [Poetry](https://python-poetry.org/) package manager
-- Chrome or Chromium browser
+```
+server/                      Python backend (FastAPI + Playwright bot)
+  requirements.txt
+  app/                       FastAPI app + scheduler + UI
+    main.py                  app entry (uvicorn runs this)
+    config.py                env-driven settings
+    db.py                    async engine / session
+    models.py                SQLAlchemy ORM (users, naukri_profiles, run_logs)
+    schemas.py               Pydantic request/response models
+    security.py              bcrypt + JWT + Fernet
+    deps.py                  FastAPI deps (current user, require_admin)
+    emailer.py               SMTP helper
+    scheduler.py             APScheduler wiring
+    runner_service.py        executes a single user's Naukri update
+    routers/
+      auth.py                /api/auth/register, /api/auth/login
+      users.py               /api/me (+ profile, resume, runs, run-now)
+      billing.py             /api/me/billing (plan, subscribe, cancel)
+      admin.py               /api/admin (users, runs, stats — admin only)
+    static/                  legacy vanilla UI (fallback when the React build isn't built)
+  naukari_bot/
+    runner.py                reusable Playwright runner (RunConfig → RunResult)
+    main.py                  legacy single-user CLI (uses the same runner)
+    .env                     local single-user / SaaS .env (gitignored)
+  scripts/
+    run_naukari.sh           wrapper used by cron for the legacy CLI
 
----
+frontend/                    React app (Vite + Tailwind + Radix)
+  src/pages/                 Auth / Dashboard / Billing / Admin
+  src/components/ui/         shadcn-style primitives (Button, Card, Switch, Dialog, …)
+```
 
-## 🛠 Local Setup
+## Environment
 
-### 1. Clone & Install Dependencies
-Navigate into your project folder and install the dependencies using Poetry:
+Copy `.env.example` to `.env` and fill in the values. All keys are validated at
+startup.
+
+Generate a Fernet key:
+
 ```bash
-poetry install
+python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 ```
 
-### 2. Install Playwright Browsers
-Install the necessary binaries and dependencies for Playwright:
+## Local run
+
+### Backend
+
 ```bash
-poetry run playwright install chromium --with-deps
+cd server
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python -m playwright install --with-deps chromium
+uvicorn app.main:app --reload
 ```
 
-### 3. Environment Variables
-Create a `.env` file in the `naukari_bot/` directory (or use the main project root depending on how you run your script) with the following credentials:
-```env
-# Naukri Credentials
-EMAIL=your_naukri_email@example.com
-PASSWORD=your_naukri_password
+### Frontend (React dev server)
 
-# Email Notification Settings
-SMTP_SERVER=smtp.gmail.com
-SMTP_PORT=587
-SMTP_EMAIL=your_sender_email@gmail.com
-SMTP_PASSWORD=your_sender_app_password
-TO_EMAIL=your_receiver_email@example.com
-```
-*Note: If using Gmail for SMTP, you must generate and use an **App Password**, not your standard account password.*
+In another terminal, from the repo root:
 
-### 4. Running the Script locally
-To run the project locally, execute:
 ```bash
-poetry run python naukari_bot/main.py
+cd frontend
+npm install
+npm run dev
 ```
-*Locally, the script will run headed (the browser will open visually) so you can debug and watch it work. Running headless is automatically enabled for CI environments natively.*
 
----
+Open **http://localhost:5173** — Vite proxies `/api/*` to the FastAPI backend
+running on `:8000`. Sign up, fill in Naukri profile, upload resume, pick a
+schedule, save. Use "Run now" to test on demand.
 
-## 🚀 GitHub Actions Setup (Daily Automation)
+### One-server build (production-style)
 
-This repository includes a predefined GitHub Actions workflow (`.github/workflows/daily_update.yml`) designed to run this script automatically every day at exactly **9:30 AM IST**.
+```bash
+cd frontend && npm install && npm run build && cd ..
+cd server && uvicorn app.main:app
+```
 
-To enable this action:
-1. Push your code to your GitHub repository.
-2. Go to **Settings** > **Secrets and variables** > **Actions**.
-3. Create a **New repository secret** for *each* of the following variables:
-   - `NAUKRI_EMAIL`
-   - `NAUKRI_PASSWORD`
-   - `SMTP_EMAIL`
-   - `SMTP_PASSWORD`
-   - `SMTP_SERVER`
-   - `SMTP_PORT`
-   - `TO_EMAIL`
-4. Make sure your actual `Harsh_Nargide.pdf` (or your relevant resume) is present in the `naukari_bot/` directory in the repository exactly as defined in your code.
-5. The Github Action workflow supports `workflow_dispatch`. Go to the **Actions** tab in Github, click on **Daily Naukri Profile Update**, and click **Run workflow** to test it immediately.
+Now FastAPI serves the built React app at **http://localhost:8000/** (and still
+exposes the API under `/api`). If `frontend/dist` doesn't exist, the server
+falls back to the old vanilla UI in `server/app/static/`.
 
----
+### Becoming admin
 
-## Troubleshooting
-- **GitHub Action Fails**: Ensure your resume pdf is correctly pushed to GitHub (if not using .gitignore) or fetched from a storage unit, as the script expects it to exist to upload.
-- **Timeouts**: Naukri occasionally changes object properties or adds new dynamic overlays (like popups or alerts). The script relies on robust waiting logic and Javascript bypasses, but DOM structure changes on Naukri may periodically require selector adjustments in `main.py` (`SAVE_BTN`, `TEXTAREA_ID`, etc.).
+Set `ADMIN_EMAIL=you@example.com` in `.env`. On every startup, that user is
+promoted to the `admin` role — the **Admin** tab appears in the nav and you can
+manage every user, toggle their subscription, or delete them.
+
+## Production run (EC2 Ubuntu)
+
+```bash
+sudo apt-get install -y python3.12-venv xvfb nodejs npm
+
+# build the React UI (outputs to frontend/dist, which FastAPI serves)
+cd frontend && npm install && npm run build && cd ..
+
+# backend
+cd server
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python -m playwright install --with-deps chromium
+
+# run the web app (behind nginx for TLS in prod)
+PLAYWRIGHT_HEADED=1 xvfb-run -a --server-args="-screen 0 1920x1080x24" \
+  uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+Prefer a systemd unit in real deployments (see below).
+
+### systemd unit (example)
+
+Save as `/etc/systemd/system/naukri-app.service`:
+
+```ini
+[Unit]
+Description=Naukri Auto Update (FastAPI + APScheduler)
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/update_resume/server
+EnvironmentFile=/home/ubuntu/update_resume/server/naukari_bot/.env
+ExecStart=/usr/bin/xvfb-run -a --server-args=-screen 0 1920x1080x24 \
+  /home/ubuntu/update_resume/server/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Then:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now naukri-app
+journalctl -u naukri-app -f
+```
+
+Put nginx (or Caddy) in front for TLS on port 443.
+
+## Schedule semantics
+
+- Each user has a `schedule_mode` of `once` or `twice` and 1–2 time-of-day slots.
+- On profile save, APScheduler jobs are (re)created for that user.
+- At startup the scheduler reloads every enabled profile's jobs from the DB.
+- Server runs in the timezone set in `app/config.py` (`Asia/Kolkata` by default).
+
+## Security
+
+- User passwords: bcrypt hashes.
+- Naukri passwords: Fernet-encrypted in Postgres (`naukri_profiles.naukri_password_enc`).
+- Resume PDFs: stored as `bytea` in Postgres, served only to the owner.
+- JWT for API auth; no refresh token flow (short/long tokens per `jwt_expire_minutes`).
+
+## Notes
+
+- Running Playwright on AWS/datacenter IPs can trigger Naukri's OTP step-up. Host
+  the app where logins already succeed reliably (home IP or a long-lived EC2 with
+  a steady session).
+- The runner reuses a per-user Playwright profile directory under
+  `var/pw-profiles/<user_id>/` to preserve cookies across runs.
+
+## Legacy single-user CLI
+
+`naukari_bot/main.py` still works for the env-driven single-user cron setup — it
+now delegates to `naukari_bot/runner.py` so there's no duplicated logic.
