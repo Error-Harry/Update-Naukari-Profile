@@ -1,7 +1,6 @@
 .env
 server/.env
 server/naukari_bot/.env
-server/naukari_bot/.pw-profile/
 var/
 artifacts/
 logs/

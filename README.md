@@ -43,10 +43,9 @@ server/                      Python backend (FastAPI + Playwright bot)
     static/                  legacy vanilla UI (fallback when the React build isn't built)
   naukari_bot/
     runner.py                reusable Playwright runner (RunConfig → RunResult)
-    main.py                  legacy single-user CLI (uses the same runner)
-    .env                     local single-user / SaaS .env (gitignored)
+    .env                     local .env (gitignored)
   scripts/
-    run_naukari.sh           wrapper used by cron for the legacy CLI
+    seed_admin.py            bootstrap / reset the admin user
 
 frontend/                    React app (Vite + Tailwind + Radix)
   src/pages/                 Auth / Dashboard / Billing / Admin
@@ -103,9 +102,27 @@ falls back to the old vanilla UI in `server/app/static/`.
 
 ### Becoming admin
 
-Set `ADMIN_EMAIL=you@example.com` in `.env`. On every startup, that user is
-promoted to the `admin` role — the **Admin** tab appears in the nav and you can
-manage every user, toggle their subscription, or delete them.
+Admin access is bootstrapped with a one-off seed script instead of an env
+variable. From the `server/` directory, run:
+
+```bash
+python -m scripts.seed_admin
+```
+
+That creates (or upgrades, if it already exists) an admin user:
+
+- email: `admin@naukri-updater.local`
+- password: `Admin@123`
+- role: `admin`, subscription: `paid`
+
+Override the defaults when you're ready to use real credentials:
+
+```bash
+python -m scripts.seed_admin --email you@example.com --password 'S3cret!' --reset-password
+```
+
+Log in with those credentials — the **Admin** tab appears in the nav and you
+can manage every user, toggle their subscription, or delete them.
 
 ## Production run (EC2 Ubuntu)
 
@@ -179,10 +196,6 @@ Put nginx (or Caddy) in front for TLS on port 443.
 - Running Playwright on AWS/datacenter IPs can trigger Naukri's OTP step-up. Host
   the app where logins already succeed reliably (home IP or a long-lived EC2 with
   a steady session).
-- The runner reuses a per-user Playwright profile directory under
-  `var/pw-profiles/<user_id>/` to preserve cookies across runs.
-
-## Legacy single-user CLI
-
-`naukari_bot/main.py` still works for the env-driven single-user cron setup — it
-now delegates to `naukari_bot/runner.py` so there's no duplicated logic.
+- After each successful login the runner captures Playwright's `storage_state`
+  and persists it encrypted in Postgres (`naukri_profiles.naukri_session_enc`),
+  so subsequent runs skip the credential login until the session expires.

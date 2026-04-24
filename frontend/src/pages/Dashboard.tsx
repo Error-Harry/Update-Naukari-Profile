@@ -4,6 +4,9 @@ import { motion } from "framer-motion";
 import {
   CheckCircle2,
   Clock,
+  Download,
+  ExternalLink,
+  Eye,
   FileText,
   Loader2,
   PlayCircle,
@@ -25,6 +28,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -222,9 +232,53 @@ function ProfileCard({ me }: { me: Me }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+
   useEffect(() => {
     setEmail(profile?.naukri_email ?? "");
   }, [profile?.naukri_email]);
+
+  // Fetch the authenticated resume PDF as a blob each time the preview opens,
+  // then hand the iframe an object URL. Plain <a href="/api/me/resume"> would
+  // miss the Authorization header and 401.
+  useEffect(() => {
+    if (!previewOpen) return;
+
+    let cancelled = false;
+    let createdUrl: string | null = null;
+
+    (async () => {
+      setPreviewLoading(true);
+      setPreviewError(null);
+      setPreviewUrl(null);
+      try {
+        const res = await api<Response>("/api/me/resume", { raw: true });
+        if (!res.ok) {
+          throw new ApiError(res.status, `Failed to load resume (${res.status})`);
+        }
+        const blob = await res.blob();
+        if (cancelled) return;
+        createdUrl = URL.createObjectURL(blob);
+        setPreviewUrl(createdUrl);
+      } catch (err) {
+        if (!cancelled) {
+          setPreviewError(
+            err instanceof ApiError ? err.detail : "Failed to load resume",
+          );
+        }
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [previewOpen]);
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -324,11 +378,13 @@ function ProfileCard({ me }: { me: Me }) {
                 <Upload className="h-4 w-4" /> Choose file
               </Button>
               {profile?.resume_filename && (
-                <a href="/api/me/resume" target="_blank" rel="noreferrer">
-                  <Button type="button" variant="ghost">
-                    View
-                  </Button>
-                </a>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  onClick={() => setPreviewOpen(true)}
+                >
+                  <Eye className="h-4 w-4" /> Preview
+                </Button>
               )}
             </div>
           </div>
@@ -347,6 +403,62 @@ function ProfileCard({ me }: { me: Me }) {
           )}
         </Button>
       </CardContent>
+
+      <Dialog open={previewOpen} onOpenChange={setPreviewOpen}>
+        <DialogContent className="flex h-[85vh] max-w-4xl flex-col gap-0 p-0">
+          <DialogHeader className="border-b p-4 pr-10">
+            <DialogTitle className="truncate">
+              {profile?.resume_filename ?? "Resume"}
+            </DialogTitle>
+            {profile?.resume_uploaded_at && (
+              <DialogDescription>
+                Uploaded {formatDateTime(profile.resume_uploaded_at)}
+              </DialogDescription>
+            )}
+          </DialogHeader>
+
+          <div className="relative flex-1 bg-muted">
+            {previewLoading && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            )}
+            {previewError && !previewLoading && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-sm text-destructive">
+                <XCircle className="h-6 w-6" />
+                {previewError}
+              </div>
+            )}
+            {previewUrl && !previewLoading && !previewError && (
+              <iframe
+                src={previewUrl}
+                title="Resume preview"
+                className="h-full w-full border-0"
+              />
+            )}
+          </div>
+
+          <div className="flex items-center justify-end gap-2 border-t p-3">
+            {previewUrl && (
+              <>
+                <a href={previewUrl} target="_blank" rel="noreferrer">
+                  <Button type="button" variant="outline">
+                    <ExternalLink className="h-4 w-4" /> Open in new tab
+                  </Button>
+                </a>
+                <a
+                  href={previewUrl}
+                  download={profile?.resume_filename ?? "resume.pdf"}
+                >
+                  <Button type="button">
+                    <Download className="h-4 w-4" /> Download
+                  </Button>
+                </a>
+              </>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 }
@@ -413,7 +525,11 @@ function ScheduleCard({ me }: { me: Me }) {
       </CardHeader>
 
       <CardContent className="space-y-4">
-        <div className="grid gap-4 sm:grid-cols-2">
+        <div
+          className={`grid gap-4 ${
+            mode === "twice" ? "sm:grid-cols-3" : "sm:grid-cols-2"
+          }`}
+        >
           <div className="space-y-2">
             <Label>Frequency</Label>
             <Select
@@ -449,7 +565,7 @@ function ScheduleCard({ me }: { me: Me }) {
           </div>
 
           {mode === "twice" && (
-            <div className="space-y-2 sm:col-span-2">
+            <div className="space-y-2">
               <Label htmlFor="time2">Second run</Label>
               <Input
                 id="time2"

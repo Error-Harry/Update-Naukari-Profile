@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
-from datetime import datetime, time
+from datetime import datetime, time, timezone
 from typing import Optional
 
 from fastapi import (
@@ -18,12 +17,13 @@ from fastapi import (
 )
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import undefer
 
 from app import security
 from app.db import get_db
 from app.deps import get_current_user
 from app.models import NaukriProfile, RunLog, User
-from app.runner_service import run_for_user
+from app.runner_service import spawn_run_for_user
 from app.scheduler import schedule_user_jobs
 from app.schemas import (
     MeOut,
@@ -107,10 +107,16 @@ async def upsert_profile(
         created = True
 
     if naukri_email is not None and naukri_email != "":
+        # Switching to a different Naukri account invalidates the stored
+        # browser session — it belongs to the old login.
+        if profile.naukri_email and profile.naukri_email != naukri_email:
+            profile.naukri_session_enc = None
         profile.naukri_email = naukri_email
 
     if naukri_password:
         profile.naukri_password_enc = security.encrypt_secret(naukri_password)
+        # A password change almost certainly invalidates any cached cookies.
+        profile.naukri_session_enc = None
 
     if schedule_mode in ("once", "twice"):
         profile.schedule_mode = schedule_mode
@@ -126,19 +132,33 @@ async def upsert_profile(
         profile.enabled = enabled
 
     if resume is not None and resume.filename:
+        if not resume.filename.lower().endswith(".pdf"):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, detail="Only PDF files are supported"
+            )
+        # Starlette exposes `UploadFile.size` when the client set Content-Length,
+        # which is almost always the case for multipart PDF uploads. Reject
+        # oversize bodies BEFORE pulling the whole payload into memory — the
+        # prior version called `.read()` first and a malicious client could
+        # OOM the process by streaming gigabytes before we checked.
+        if resume.size is not None and resume.size > MAX_RESUME_BYTES:
+            raise HTTPException(
+                status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail="Resume must be <= 5 MB",
+            )
         data = await resume.read()
+        # Defensive re-check in case `size` was not advertised.
         if len(data) > MAX_RESUME_BYTES:
             raise HTTPException(
                 status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                 detail="Resume must be <= 5 MB",
             )
-        if not resume.filename.lower().endswith(".pdf"):
-            raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, detail="Only PDF files are supported"
-            )
         profile.resume_bytes = data
+        # Keep the user's original filename so the UI, preview and download
+        # show exactly what they uploaded. The Naukri-facing rename happens
+        # at run time in runner_service (see `build_resume_filename`).
         profile.resume_filename = resume.filename
-        profile.resume_uploaded_at = datetime.utcnow()
+        profile.resume_uploaded_at = datetime.now(timezone.utc)
 
     await db.commit()
     await db.refresh(profile)
@@ -148,12 +168,35 @@ async def upsert_profile(
     return profile
 
 
+@router.delete("/naukri-session", response_model=MessageOut)
+async def reset_naukri_session(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> MessageOut:
+    """Forget the cached Naukri browser session — next run will log in fresh."""
+    profile = await _get_or_none_profile(db, user.id)
+    if not profile:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No Naukri profile yet")
+    if profile.naukri_session_enc is None:
+        return MessageOut(detail="No cached session to reset")
+    profile.naukri_session_enc = None
+    await db.commit()
+    return MessageOut(detail="Cached Naukri session cleared")
+
+
 @router.get("/resume")
 async def download_resume(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Response:
-    profile = await _get_or_none_profile(db, user.id)
+    # The resume blob is deferred on the model; explicitly undefer so we fetch
+    # the PDF in the same round-trip instead of triggering a second SELECT.
+    result = await db.execute(
+        select(NaukriProfile)
+        .where(NaukriProfile.user_id == user.id)
+        .options(undefer(NaukriProfile.resume_bytes))
+    )
+    profile = result.scalar_one_or_none()
     if not profile or not profile.resume_bytes:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="No resume uploaded")
     return Response(
@@ -180,7 +223,7 @@ async def list_runs(
 
 @router.post("/run-now", response_model=MessageOut, status_code=status.HTTP_202_ACCEPTED)
 async def run_now(user: User = Depends(get_current_user)) -> MessageOut:
-    asyncio.create_task(run_for_user(user.id))
+    spawn_run_for_user(user.id)
     return MessageOut(detail="Run started. You'll get an email when it finishes.")
 
 

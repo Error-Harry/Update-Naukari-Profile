@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -58,7 +58,7 @@ async def subscribe(
     if user.subscription == "paid":
         raise HTTPException(status.HTTP_400_BAD_REQUEST, detail="Already on Pro plan")
     user.subscription = "paid"
-    user.subscribed_at = datetime.utcnow()
+    user.subscribed_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(user)
     return user

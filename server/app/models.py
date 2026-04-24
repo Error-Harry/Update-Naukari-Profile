@@ -61,9 +61,16 @@ class NaukriProfile(Base):
 
     naukri_email: Mapped[Optional[str]] = mapped_column(String(320))
     naukri_password_enc: Mapped[Optional[bytes]] = mapped_column(LargeBinary)
+    # Fernet-encrypted JSON blob of Playwright's storage_state (cookies + origins).
+    # Lets every scheduled run resume the previous browser session instead of
+    # re-entering credentials — no per-host disk profile required.
+    naukri_session_enc: Mapped[Optional[bytes]] = mapped_column(LargeBinary)
 
     resume_filename: Mapped[Optional[str]] = mapped_column(String(300))
-    resume_bytes: Mapped[Optional[bytes]] = mapped_column(LargeBinary)
+    # Up to 5 MB per user — mark deferred so the common `select(NaukriProfile)`
+    # queries (get_me, admin list, scheduler reload) don't fetch every blob.
+    # Use `undefer(NaukriProfile.resume_bytes)` when you actually need it.
+    resume_bytes: Mapped[Optional[bytes]] = mapped_column(LargeBinary, deferred=True)
     resume_uploaded_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     schedule_mode: Mapped[str] = mapped_column(String(10), default="once", nullable=False)
@@ -80,6 +87,11 @@ class NaukriProfile(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="profile")
+
+    @property
+    def has_session(self) -> bool:
+        """True when a cached Playwright session is stored for this profile."""
+        return self.naukri_session_enc is not None
 
 
 class RunLog(Base):

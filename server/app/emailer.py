@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import smtplib
 from email.message import EmailMessage
@@ -20,6 +21,12 @@ def send_email(
     attachment_bytes: Optional[bytes] = None,
     attachment_name: Optional[str] = None,
 ) -> None:
+    """Blocking SMTP send. Safe to call from sync code / worker threads.
+
+    Prefer `send_email_async` from anywhere inside the asyncio event loop —
+    SMTP handshakes regularly take several seconds and will stall every
+    other request/scheduler tick if run directly in the loop.
+    """
     s = get_settings()
     try:
         msg = EmailMessage()
@@ -34,10 +41,29 @@ def send_email(
                 subtype="pdf",
                 filename=attachment_name,
             )
-        with smtplib.SMTP(s.smtp_server, s.smtp_port) as smtp:
+        with smtplib.SMTP(s.smtp_server, s.smtp_port, timeout=30) as smtp:
             smtp.starttls()
             smtp.login(s.smtp_email, s.smtp_password)
             smtp.send_message(msg)
         log.info("Email sent: %r to %s", subject, to_email)
     except Exception as e:  # noqa: BLE001
         log.error("Email failed (%s): %s", to_email, e)
+
+
+async def send_email_async(
+    *,
+    to_email: str,
+    subject: str,
+    body: str,
+    attachment_bytes: Optional[bytes] = None,
+    attachment_name: Optional[str] = None,
+) -> None:
+    """Async wrapper that runs `send_email` on a worker thread."""
+    await asyncio.to_thread(
+        send_email,
+        to_email=to_email,
+        subject=subject,
+        body=body,
+        attachment_bytes=attachment_bytes,
+        attachment_name=attachment_name,
+    )

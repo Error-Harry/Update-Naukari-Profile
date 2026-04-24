@@ -67,6 +67,9 @@ class ProfileOut(BaseModel):
     last_run_at: Optional[datetime] = None
     last_status: Optional[str] = None
     last_error: Optional[str] = None
+    # True when we have a cached Naukri browser session for this user.
+    # Sourced from the `has_session` @property on NaukriProfile.
+    has_session: bool = False
 
 
 class ProfileUpdateIn(BaseModel):

@@ -77,7 +77,9 @@ async def update_user(
 
     if payload.subscription is not None and payload.subscription != user.subscription:
         user.subscription = payload.subscription
-        user.subscribed_at = datetime.utcnow() if payload.subscription == "paid" else None
+        user.subscribed_at = (
+            datetime.now(timezone.utc) if payload.subscription == "paid" else None
+        )
 
     if payload.role is not None:
         if user.id == admin.id and payload.role != "admin":

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -41,8 +40,6 @@ class Settings(BaseSettings):
     playwright_headed: bool = Field(True, alias="PLAYWRIGHT_HEADED")
 
     tz: str = "Asia/Kolkata"
-
-    admin_email: Optional[str] = Field(None, alias="ADMIN_EMAIL")
 
 
 @lru_cache

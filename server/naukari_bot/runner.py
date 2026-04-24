@@ -9,14 +9,19 @@ no sys.exit, no SMTP — callers (CLI or web app) handle those concerns.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
-import tempfile
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import Optional
+from datetime import datetime, timezone
+from typing import Any, Optional
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 from playwright.async_api import (
+    BrowserContext,
     Page,
     TimeoutError as PlaywrightTimeoutError,
     async_playwright,
@@ -35,7 +40,10 @@ class RunConfig:
     naukri_password: str
     resume_bytes: bytes
     resume_filename: str
-    user_data_dir: Optional[str] = None
+    # JSON (str) output of Playwright's `context.storage_state()` from the
+    # previous successful run. Restores cookies/localStorage so the browser
+    # resumes the last Naukri session without another credential login.
+    initial_storage_state_json: Optional[str] = None
     headed: bool = True
     max_retries: int = 2
     artifacts_dir: str = "artifacts"
@@ -48,61 +56,58 @@ class RunResult:
     error: Optional[str] = None
     attempts: int = 0
     artifacts: list[str] = field(default_factory=list)
-    finished_at: datetime = field(default_factory=datetime.utcnow)
+    finished_at: datetime = field(default_factory=_utcnow)
+    # The latest known-good `storage_state` JSON captured right after a
+    # successful login. Callers should persist this (encrypted) so subsequent
+    # runs can reuse it. None when no fresh session was ever established.
+    final_storage_state_json: Optional[str] = None
 
 
 async def run_naukri_update(cfg: RunConfig) -> RunResult:
     """Top-level entry. Retries on failure; returns a structured RunResult."""
     last_error: Optional[str] = None
     artifacts: list[str] = []
-    headline: Optional[str] = None
+    # Populated by `_upload_resume_once` as soon as login succeeds — even if a
+    # later step fails we still want to persist the fresh cookies so the next
+    # run can resume.
+    state_sink: list[str] = []
 
-    with tempfile.NamedTemporaryFile(
-        prefix="resume_", suffix=_safe_suffix(cfg.resume_filename), delete=False
-    ) as tmp:
-        tmp.write(cfg.resume_bytes)
-        resume_path = tmp.name
-
-    try:
-        for attempt in range(1, cfg.max_retries + 1):
-            log.info("Attempt %d", attempt)
-            try:
-                headline = await _upload_resume_once(cfg, resume_path)
-                return RunResult(
-                    success=True,
-                    headline=headline,
-                    attempts=attempt,
-                    artifacts=artifacts,
-                )
-            except Exception as e:  # noqa: BLE001
-                last_error = str(e)
-                log.error("Attempt %d failed: %s", attempt, e)
-                await asyncio.sleep(5)
-        return RunResult(
-            success=False,
-            error=last_error,
-            attempts=cfg.max_retries,
-            artifacts=artifacts,
-        )
-    finally:
+    for attempt in range(1, cfg.max_retries + 1):
+        log.info("Attempt %d", attempt)
         try:
-            os.remove(resume_path)
-        except OSError:
-            pass
+            headline = await _upload_resume_once(cfg, state_sink)
+            return RunResult(
+                success=True,
+                headline=headline,
+                attempts=attempt,
+                artifacts=artifacts,
+                final_storage_state_json=state_sink[-1] if state_sink else None,
+            )
+        except Exception as e:  # noqa: BLE001
+            last_error = str(e)
+            log.error("Attempt %d failed: %s", attempt, e)
+            await asyncio.sleep(5)
+
+    return RunResult(
+        success=False,
+        error=last_error,
+        attempts=cfg.max_retries,
+        artifacts=artifacts,
+        final_storage_state_json=state_sink[-1] if state_sink else None,
+    )
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _safe_suffix(filename: str) -> str:
-    _, ext = os.path.splitext(filename or "")
-    return ext if ext else ".pdf"
-
 
 async def _dump_debug_artifacts(page: Page, prefix: str, artifacts_dir: str) -> list[str]:
     out: list[str] = []
     try:
+        # Normalise to an absolute path so the dump location doesn't depend on
+        # whatever cwd uvicorn / cron happened to start from.
+        artifacts_dir = os.path.abspath(artifacts_dir)
         os.makedirs(artifacts_dir, exist_ok=True)
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         base = os.path.join(artifacts_dir, f"{prefix}_{ts}")
@@ -257,43 +262,54 @@ async def _update_resume_headline(page: Page) -> str:
     return original
 
 
-async def _upload_resume_once(cfg: RunConfig, resume_path: str) -> str:
+async def _upload_resume_once(
+    cfg: RunConfig,
+    state_sink: list[str],
+) -> str:
     async with async_playwright() as p:
         headless = not cfg.headed
         launch_args = [
             "--disable-blink-features=AutomationControlled",
             "--disable-dev-shm-usage",
         ]
-        browser = None
-        context = None
-        if cfg.user_data_dir:
-            os.makedirs(cfg.user_data_dir, exist_ok=True)
-            log.info("Using persistent browser profile at %s", cfg.user_data_dir)
-            context = await p.chromium.launch_persistent_context(
-                cfg.user_data_dir,
-                headless=headless,
-                viewport={"width": 1280, "height": 720},
-                locale="en-IN",
-                timezone_id="Asia/Kolkata",
-                args=launch_args,
-            )
-            page = context.pages[0] if context.pages else await context.new_page()
-        else:
-            browser = await p.chromium.launch(headless=headless, args=launch_args)
-            context = await browser.new_context(
-                viewport={"width": 1280, "height": 720},
-                locale="en-IN",
-                timezone_id="Asia/Kolkata",
-            )
-            page = await context.new_page()
+        browser = await p.chromium.launch(headless=headless, args=launch_args)
+        new_context_kwargs: dict[str, Any] = {
+            "viewport": {"width": 1280, "height": 720},
+            "locale": "en-IN",
+            "timezone_id": "Asia/Kolkata",
+        }
+        initial_state = _parse_storage_state(cfg.initial_storage_state_json)
+        if initial_state is not None:
+            log.info("Restoring Naukri session from stored storage_state")
+            new_context_kwargs["storage_state"] = initial_state
+        context: BrowserContext = await browser.new_context(**new_context_kwargs)
+        page = await context.new_page()
 
         try:
             await _ensure_logged_in(page, cfg)
 
+            # Capture the fresh, known-good session cookies as soon as we're
+            # logged in — even if the resume/headline steps fail later, the
+            # caller can still persist this so the next run skips login.
+            await _capture_storage_state(context, state_sink)
+
             await page.click("text=Update resume")
-            await page.set_input_files("input[type='file']", resume_path)
+            # In-memory FilePayload: the `name` field is exactly what the
+            # browser sends to Naukri in `Content-Disposition: filename=...`.
+            # Using a path-on-disk would leak the tempfile's random basename
+            # (e.g. `resume_abc123.pdf`) instead of the canonical dated name.
+            await page.set_input_files(
+                "input[type='file']",
+                files=[
+                    {
+                        "name": cfg.resume_filename,
+                        "mimeType": "application/pdf",
+                        "buffer": cfg.resume_bytes,
+                    }
+                ],
+            )
             await page.wait_for_timeout(5000)
-            log.info("Resume uploaded")
+            log.info("Resume uploaded to Naukri as %r", cfg.resume_filename)
 
             await page.goto("https://www.naukri.com/mnjuser/profile", timeout=60000)
             await page.wait_for_load_state("domcontentloaded", timeout=30000)
@@ -301,10 +317,32 @@ async def _upload_resume_once(cfg: RunConfig, resume_path: str) -> str:
             await page.wait_for_timeout(2000)
 
             headline = await _update_resume_headline(page)
+            # Re-capture after the headline edit so any tokens refreshed during
+            # the update get persisted too.
+            await _capture_storage_state(context, state_sink)
             return headline
         finally:
-            if browser:
-                await browser.close()
-            else:
-                assert context is not None
-                await context.close()
+            await browser.close()
+
+
+def _parse_storage_state(raw: Optional[str]) -> Optional[dict[str, Any]]:
+    if not raw:
+        return None
+    try:
+        parsed = json.loads(raw)
+    except (TypeError, ValueError) as e:
+        log.warning("Stored storage_state is not valid JSON — ignoring (%s)", e)
+        return None
+    if not isinstance(parsed, dict):
+        log.warning("Stored storage_state has unexpected shape — ignoring")
+        return None
+    return parsed
+
+
+async def _capture_storage_state(context: BrowserContext, sink: list[str]) -> None:
+    """Dump the current storage_state into `sink` so the caller can persist it."""
+    try:
+        state = await context.storage_state()
+        sink.append(json.dumps(state))
+    except Exception as e:  # noqa: BLE001
+        log.warning("Failed to capture storage_state: %s", e)

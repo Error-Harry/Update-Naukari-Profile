@@ -39,6 +39,12 @@ _REACT_DIST = os.path.join(_REPO_ROOT, "frontend", "dist")
 _ADDITIVE_MIGRATIONS = [
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS role VARCHAR(20) NOT NULL DEFAULT 'user'",
     "ALTER TABLE users ADD COLUMN IF NOT EXISTS subscribed_at TIMESTAMP WITH TIME ZONE",
+    "ALTER TABLE naukri_profiles ADD COLUMN IF NOT EXISTS naukri_session_enc BYTEA",
+    # Per-user run history: descending (user_id, started_at) matches the
+    # dashboard's "latest 20 runs for me" query exactly.
+    "CREATE INDEX IF NOT EXISTS ix_run_logs_user_started ON run_logs (user_id, started_at DESC)",
+    # Admin dashboard / stats queries sort/filter by started_at globally.
+    "CREATE INDEX IF NOT EXISTS ix_run_logs_started ON run_logs (started_at DESC)",
 ]
 
 
@@ -51,13 +57,6 @@ async def lifespan(app: FastAPI):
                 await conn.execute(text(sql))
             except Exception as e:  # pragma: no cover
                 log.warning("Migration skipped (%s): %s", sql, e)
-
-        if _SETTINGS.admin_email:
-            await conn.execute(
-                text("UPDATE users SET role='admin' WHERE lower(email)=lower(:email)"),
-                {"email": _SETTINGS.admin_email},
-            )
-            log.info("Ensured admin role for %s", _SETTINGS.admin_email)
 
     log.info("DB schema ensured")
 
