@@ -1,0 +1,29 @@
+# Secrets — NEVER ship these into the image.
+.env
+.env.*
+naukari_bot/.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local state
+var/
+artifacts/
+logs/
+
+# VCS / IDE / misc
+.git
+.gitignore
+.vscode
+.idea
+*.md
+*.log
+.DS_Store
