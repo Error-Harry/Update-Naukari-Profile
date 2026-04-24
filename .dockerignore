@@ -1,0 +1,39 @@
+# VCS / IDE
+.git
+.gitignore
+.gitattributes
+.github
+.vscode
+.idea
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+server/.venv/
+server/**/__pycache__/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend (build happens inside the image)
+frontend/node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Local state & secrets — NEVER ship into the image
+.env
+.env.*
+server/.env
+server/naukari_bot/.env
+var/
+artifacts/
+logs/
+
+# Misc
+*.md
+*.log
+.DS_Store
